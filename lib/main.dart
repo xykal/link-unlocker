@@ -43,18 +43,18 @@ class UnlockResult {
 }
 
 class Unlocker {
-  static final _urlRe = RegExp(r"https?://[^\s\"'<>]+", caseSensitive: false);
+  static final _urlRe = RegExp(r'https?://[^\s\x22\x27<>]+', caseSensitive: false);
   static final _metaRe = RegExp(
-      r"<meta[^>]*content=[^>]*url=([^\s\"'>]+)",
+      r'<meta[^>]*content=[^>]*url=([^\s\x22\x27>]+)',
       caseSensitive: false);
   static final _jsRe = RegExp(
-      r"location(?:\.href)?\s*=\s*[\\"']([^\\"'\s]+)[\\"']",
+      r"location(?:\.href)?\s*=\s*[\x22\x27]([^\x22\x27\s]+)[\x22\x27]",
       caseSensitive: false);
   static final _openRe = RegExp(
-      r"window\.open\(\s*[\\"']([^\\"'\s]+)[\\"']",
+      r"window\.open\(\s*[\x22\x27]([^\x22\x27\s]+)[\x22\x27]",
       caseSensitive: false);
   static final _titleRe =
-      RegExp(r"<title[^>]*>(.*?)</title>", caseSensitive: false, dotAll: true);
+      RegExp(r'<title[^>]*>(.*?)</title>', caseSensitive: false, dotAll: true);
 
   static Future<UnlockResult> unlock(String raw) async {
     var url = raw.trim();

@@ -244,11 +244,10 @@ class Unlocker {
         if (dec.startsWith('http')) cands.add(_clean(dec));
       } catch (_) {}
     }
-    // JSON-escaped URLs already handled by _norm in _clean? ensure
-    final jsonUrlRe = RegExp(r"https?:\\?/\\?/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-\\]+", caseSensitive: false);
-    for (final m in jsonUrlRe.allMatches(body)) {
-      final u = _clean(m.group(0)!);
-      if (u.startsWith('http')) cands.add(u);
+    // JSON "url" fields (escaped slashes)
+    for (final m in RegExp(r'"url"\s*:\s*"([^"]+)"', caseSensitive: false).allMatches(body)) {
+      final u = _norm(m.group(1)!);
+      if (u.startsWith('http')) cands.add(_clean(u));
     }
 
     return {

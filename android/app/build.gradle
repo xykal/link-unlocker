@@ -36,9 +36,25 @@ android {
         versionName flutterVersionName
     }
 
+    signingConfigs {
+        release {
+            def ksPath = System.getenv("KEYSTORE_PATH") ?: "release.keystore"
+            def ksFile = file(ksPath)
+            if (ksFile.exists()) {
+                storeFile ksFile
+                storePassword System.getenv("KEYSTORE_PASSWORD") ?: ""
+                keyAlias System.getenv("KEY_ALIAS") ?: "linkunlocker"
+                keyPassword System.getenv("KEY_PASSWORD") ?: ""
+            }
+        }
+    }
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            if (signingConfigs.release.storeFile != null) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
             minifyEnabled false
             shrinkResources false
         }

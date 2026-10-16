@@ -48,10 +48,10 @@ class Unlocker {
       r'<meta[^>]*content=[^>]*url=([^\s\x22\x27>]+)',
       caseSensitive: false);
   static final _jsRe = RegExp(
-      r"location(?:\.href)?\s*=\s*[\x22\x27]([^\x22\x27\s]+)[\x22\x27]",
+      r'location(?:\.href)?\s*=\s*[\x22\x27]([^\x22\x27\s]+)[\x22\x27]',
       caseSensitive: false);
   static final _openRe = RegExp(
-      r"window\.open\(\s*[\x22\x27]([^\x22\x27\s]+)[\x22\x27]",
+      r'window\.open\(\s*[\x22\x27]([^\x22\x27\s]+)[\x22\x27]',
       caseSensitive: false);
   static final _titleRe =
       RegExp(r'<title[^>]*>(.*?)</title>', caseSensitive: false, dotAll: true);
@@ -100,7 +100,8 @@ class Unlocker {
 
     final cands = <String>{};
     for (final m in _urlRe.allMatches(body)) {
-      var u = m.group(0)!.trim().replaceAll(RegExp(r'[).,;"'']+$'), '');
+      var u = m.group(0)!.trim();
+      u = u.replaceAll(RegExp(r'[).,;\x22\x27]+'), '');
       if (u.startsWith('http')) cands.add(u);
     }
     for (final m in _metaRe.allMatches(body)) {
@@ -129,7 +130,7 @@ class Unlocker {
     bool isAd(String u) {
       try {
         final h = Uri.parse(u).host.toLowerCase();
-        return adDomains.any((d) => h == d || h.endsWith('.$d'));
+        return adDomains.any((d) => h == d || h.endsWith('.' + d));
       } catch (_) {
         return false;
       }
@@ -143,7 +144,6 @@ class Unlocker {
       if (isAd(c)) continue;
       if (seen.add(c)) filtered.add(c);
     }
-    // rank: different host from input first, then shorter
     filtered.sort((a, b) {
       final ha = Uri.tryParse(a)?.host.toLowerCase() ?? '';
       final hb = Uri.tryParse(b)?.host.toLowerCase() ?? '';
@@ -238,7 +238,7 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 12),
             FilledButton(
               onPressed: _loading ? null : _go,
-              child: Text(_loading ? 'fetching…' : 'Unlock'),
+              child: Text(_loading ? 'fetching...' : 'Unlock'),
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),
@@ -285,7 +285,7 @@ class _HomePageState extends State<HomePage> {
               else
                 _Block(
                   title: 'candidate links',
-                  child: const Text('none found — inspect redirect chain manually'),
+                  child: const Text('none found - inspect redirect chain manually'),
                 ),
             ],
           ],

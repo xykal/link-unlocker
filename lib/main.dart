@@ -32,6 +32,14 @@ const List<String> kFileHosts = [
   'anonfiles.com', 'bayfiles.com', 'rapidgator.net', 'uploaded.net',
   'nitroflare.com', 'turbobit.net', 'filefactory.com', 'sendspace.com',
   'wetransfer.com', 'pixeldrain.com', 'workupload.com', 'krakenfiles.com',
+  'github.com', 'gitlab.com',
+];
+
+const List<String> kLockerHosts = [
+  'sub4unlock.com', 'sub4unlock.co', 'sfl.gl', 'adf.ly', 'ouo.io', 'ouo.press',
+  'linkvertise.com', 'link-to.net', 'linkunlock.in', 'shorte.st', 'bc.vc',
+  'adfoc.us', 'oke.io', 'clk.sh', 'za.gl', 'gtlinks.me', 'gplinks.co',
+  'shrinkearn.com', 'earn4files.com', 'upshrink.com',
 ];
 
 class UnlockResult {
@@ -54,7 +62,7 @@ class UnlockResult {
 }
 
 class Unlocker {
-  static final _urlRe = RegExp(r'https?://[^\s\x22\x27<>]+', caseSensitive: false);
+  static final _urlRe = RegExp(r'https?://[^\s\x22\x27<>\\]+', caseSensitive: false);
   static final _metaRe = RegExp(
       r'<meta[^>]*content=[^>]*url=([^\s\x22\x27>]+)',
       caseSensitive: false);
@@ -67,6 +75,8 @@ class Unlocker {
   static final _b64Re = RegExp(r'[A-Za-z0-9+/]{24,}={0,2}');
   static final _titleRe =
       RegExp(r'<title[^>]*>(.*?)</title>', caseSensitive: false, dotAll: true);
+  static final _formRe = RegExp(r'<form\b[^>]*>(.*?)</form>',
+      caseSensitive: false, dotAll: true);
 
   static bool isFileHost(String u) {
     try {
@@ -77,20 +87,64 @@ class Unlocker {
     }
   }
 
-  static String _clean(String u) => u.replaceAll(RegExp(r'[).,;\x22\x27]+'), '');
-
-  static Future<UnlockResult> unlock(String raw) async {
-    var url = raw.trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'https://$url';
+  static bool isLockerHost(String u) {
+    try {
+      final h = Uri.parse(u).host.toLowerCase();
+      return kLockerHosts.any((d) => h == d || h.endsWith('.' + d));
+    } catch (_) {
+      return false;
     }
+  }
+
+  static String _norm(String u) {
+    var s = u.trim();
+    s = s.replaceAll(r'\/', '/');
+    s = s.replaceAll(r'\\', '');
+    // html entities
+    s = s.replaceAll('&amp;', '&');
+    return s;
+  }
+
+  static String _clean(String u) => _norm(u).replaceAll(RegExp(r'[).,;\x22\x27]+'), '');
+
+  static Map<String, String> _parseForm(String formHtml, String pageUrl) {
+    final res = <String, String>{};
+    final actionMatch = RegExp(r'action\s*=\s*[\x22\x27]([^"\x27]+)[\x22\x27]',
+            caseSensitive: false)
+        .firstMatch(formHtml);
+    // inputs
+    for (final m in RegExp(r'<input\b[^>]*>', caseSensitive: false).allMatches(formHtml)) {
+      final tag = m.group(0)!;
+      final name = RegExp(r'name\s*=\s*[\x22\x27]([^"\x27]+)[\x22\x27]',
+              caseSensitive: false)
+          .firstMatch(tag)
+          ?.group(1);
+      final value = RegExp(r'value\s*=\s*[\x22\x27]([^"\x27]*)[\x22\x27]',
+              caseSensitive: false)
+          .firstMatch(tag)
+          ?.group(1);
+      if (name != null) res[name] = value ?? '';
+    }
+    // method
+    final methodMatch = RegExp(r'method\s*=\s*[\x22\x27]([^"\x27]+)[\x22\x27]',
+            caseSensitive: false)
+        .firstMatch(formHtml);
+    res['__method__'] = (methodMatch?.group(1) ?? 'GET').toUpperCase();
+    if (actionMatch != null) {
+      res['__action__'] = Uri.parse(pageUrl).resolve(actionMatch.group(1)!).toString();
+    }
+    return res;
+  }
+
+  // Resolve a single URL: follow redirects, submit GET/POST forms, extract candidates.
+  static Future<Map<String, dynamic>> _resolveOnce(String url) async {
     final client = http.Client();
     final chain = <String>[];
     String current = url;
     http.Response? last;
     int hops = 0;
     try {
-      while (hops < 10) {
+      while (hops < 15) {
         final req = http.Request('GET', Uri.parse(current))
           ..followRedirects = false
           ..headers['User-Agent'] =
@@ -112,6 +166,49 @@ class Unlocker {
           hops++;
           continue;
         }
+        // Form auto-submit
+        final body = resp.body;
+        bool submitted = false;
+        for (final fm in _formRe.allMatches(body)) {
+          final formHtml = fm.group(0)!;
+          final parsed = _parseForm(formHtml, current);
+          final action = parsed.remove('__action__');
+          final method = parsed.remove('__method__') ?? 'GET';
+          if (action == null) continue;
+          if (method == 'GET') {
+            final uri = Uri.parse(action).replace(queryParameters: {
+              ...Uri.parse(action).queryParameters,
+              ...parsed,
+            });
+            current = uri.toString();
+            submitted = true;
+            break;
+          } else {
+            // POST
+            final postResp = await client.post(Uri.parse(action),
+                body: parsed,
+                headers: {
+                  'User-Agent':
+                      'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+                });
+            chain.add(action);
+            last = postResp;
+            final ploc = postResp.headers['location'];
+            if (ploc != null) {
+              current = Uri.parse(action).resolve(ploc).toString();
+              submitted = true;
+              break;
+            }
+            // try extract from body
+            current = action;
+            submitted = true;
+            break;
+          }
+        }
+        if (submitted) {
+          hops++;
+          continue;
+        }
         break;
       }
     } finally {
@@ -123,30 +220,92 @@ class Unlocker {
 
     final cands = <String>{};
     for (final m in _urlRe.allMatches(body)) {
-      final u = _clean(m.group(0)!.trim());
+      final u = _clean(m.group(0)!);
       if (u.startsWith('http')) cands.add(u);
     }
     for (final m in _metaRe.allMatches(body)) {
       try {
-        cands.add(Uri.parse(resolvedFinal).resolve(m.group(1)!.trim()).toString());
+        cands.add(Uri.parse(resolvedFinal).resolve(_norm(m.group(1)!)).toString());
       } catch (_) {}
     }
     for (final m in _jsRe.allMatches(body)) {
       try {
-        cands.add(Uri.parse(resolvedFinal).resolve(m.group(1)!.trim()).toString());
+        cands.add(Uri.parse(resolvedFinal).resolve(_norm(m.group(1)!)).toString());
       } catch (_) {}
     }
     for (final m in _openRe.allMatches(body)) {
       try {
-        cands.add(Uri.parse(resolvedFinal).resolve(m.group(1)!.trim()).toString());
+        cands.add(Uri.parse(resolvedFinal).resolve(_norm(m.group(1)!)).toString());
       } catch (_) {}
     }
-    // base64-encoded URLs
     for (final m in _b64Re.allMatches(body)) {
       try {
         final dec = utf8.decode(base64.decode(m.group(0)!));
         if (dec.startsWith('http')) cands.add(_clean(dec));
       } catch (_) {}
+    }
+    // JSON-escaped URLs already handled by _norm in _clean? ensure
+    final jsonUrlRe = RegExp(r'https?:\\?/\\?/[^\s\x22\x27<>]+', caseSensitive: false);
+    for (final m in jsonUrlRe.allMatches(body)) {
+      final u = _clean(m.group(0)!);
+      if (u.startsWith('http')) cands.add(u);
+    }
+
+    return {
+      'finalUrl': resolvedFinal,
+      'status': status,
+      'chain': chain,
+      'candidates': cands,
+      'body': body,
+    };
+  }
+
+  static Future<UnlockResult> unlock(String raw) async {
+    var url = raw.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://$url';
+    }
+    final allChain = <String>[];
+    final allCands = <String>{};
+    String current = url;
+    String finalUrl = url;
+    int status = 0;
+    String body = '';
+    final visited = <String>{};
+
+    // Recursively resolve lockers up to 6 hops
+    for (int i = 0; i < 6; i++) {
+      if (visited.contains(current)) break;
+      visited.add(current);
+      final r = await _resolveOnce(current);
+      finalUrl = r['finalUrl'] as String;
+      status = r['status'] as int;
+      body = r['body'] as String;
+      allChain.addAll(r['chain'] as List<String>);
+      allCands.addAll(r['candidates'] as Set<String>);
+      // decide next
+      String? next;
+      // if final is locker, look for candidate that is file host or non-locker
+      if (isLockerHost(finalUrl)) {
+        // prefer file host candidate
+        final fileCands = (r['candidates'] as Set<String>).where(isFileHost).toList();
+        if (fileCands.isNotEmpty) {
+          next = fileCands.first;
+        } else {
+          // pick first candidate that is not a locker and not ad
+          for (final c in (r['candidates'] as Set<String>)) {
+            if (!isLockerHost(c)) {
+              next = c;
+              break;
+            }
+          }
+        }
+      } else {
+        // final not locker; but maybe a candidate is a deeper locker? stop
+        next = null;
+      }
+      if (next == null || next == current || visited.contains(next)) break;
+      current = next;
     }
 
     const adDomains = {
@@ -165,12 +324,9 @@ class Unlocker {
       }
     }
 
-    final inputHost = Uri.tryParse(url)?.host.toLowerCase() ?? '';
     final filtered = <String>[];
     final seen = <String>{};
-    for (final c in cands) {
-      if (c == resolvedFinal) continue;
-      if (chain.contains(c)) continue;
+    for (final c in allCands) {
       if (isAd(c)) continue;
       if (seen.add(c)) filtered.add(c);
     }
@@ -178,15 +334,17 @@ class Unlocker {
       final fa = isFileHost(a) ? 0 : 1;
       final fb = isFileHost(b) ? 0 : 1;
       if (fa != fb) return fa.compareTo(fb);
-      final ha = Uri.tryParse(a)?.host.toLowerCase() ?? '';
-      final hb = Uri.tryParse(b)?.host.toLowerCase() ?? '';
-      final da = (ha != inputHost && ha.isNotEmpty) ? 0 : 1;
-      final db = (hb != inputHost && hb.isNotEmpty) ? 0 : 1;
-      if (da != db) return da.compareTo(db);
+      final la = isLockerHost(a) ? 1 : 0;
+      final lb = isLockerHost(b) ? 1 : 0;
+      if (la != lb) return la.compareTo(lb);
       return a.length.compareTo(b.length);
     });
 
     final originalLinks = filtered.where(isFileHost).toList();
+    // if no file host, use final url if not locker
+    if (originalLinks.isEmpty && !isLockerHost(finalUrl)) {
+      originalLinks.add(finalUrl);
+    }
 
     final titleMatch = _titleRe.firstMatch(body);
     final title = titleMatch != null
@@ -195,10 +353,10 @@ class Unlocker {
 
     return UnlockResult(
       input: url,
-      finalUrl: resolvedFinal,
+      finalUrl: finalUrl,
       status: status,
-      chain: chain,
-      candidates: filtered.take(80).toList(),
+      chain: allChain,
+      candidates: filtered.take(100).toList(),
       originalLinks: originalLinks,
       title: title,
     );
@@ -280,7 +438,7 @@ class _HomePageState extends State<HomePage> {
                     Text('Paste locker URL',
                         style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 4),
-                    Text('sfgl, sub4unlock, adf.ly, ouo, dll. App follow redirect & scrape link asli.',
+                    Text('sfgl, sub4unlock, adf.ly, ouo, dll. Auto-resolve nested lockers.',
                         style: Theme.of(context).textTheme.bodySmall),
                     const SizedBox(height: 12),
                     TextField(

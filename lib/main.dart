@@ -287,17 +287,16 @@ class Unlocker {
       String? next;
       // if final is locker, look for candidate that is file host or non-locker
       if (isLockerHost(finalUrl)) {
-        // prefer file host candidate
-        final fileCands = (r['candidates'] as Set<String>).where(isFileHost).toList();
-        if (fileCands.isNotEmpty) {
-          next = fileCands.first;
+        final cset = r['candidates'] as Set<String>;
+        final lockerCands = cset.where(isLockerHost).toList();
+        if (lockerCands.isNotEmpty) {
+          next = lockerCands.first;
         } else {
-          // pick first candidate that is not a locker and not ad
-          for (final c in (r['candidates'] as Set<String>)) {
-            if (!isLockerHost(c)) {
-              next = c;
-              break;
-            }
+          final fileCands = cset.where(isFileHost).toList();
+          if (fileCands.isNotEmpty) {
+            next = fileCands.first;
+          } else if (cset.isNotEmpty) {
+            next = cset.first;
           }
         }
       } else {

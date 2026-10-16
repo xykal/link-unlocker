@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
@@ -17,7 +18,7 @@ class UnlockerApp extends StatelessWidget {
       theme: ThemeData(
         brightness: Brightness.dark,
         colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF58A6FF), brightness: Brightness.dark),
+            seedColor: const Color(0xFF00D4AA), brightness: Brightness.dark),
         useMaterial3: true,
       ),
       home: const HomePage(),
@@ -25,12 +26,21 @@ class UnlockerApp extends StatelessWidget {
   }
 }
 
+const List<String> kFileHosts = [
+  'gofile.io', 'mediafire.com', 'drive.google.com', 'mega.nz', 'mega.co.nz',
+  'dropbox.com', 'box.com', 'onedrive.live.com', '1drv.ms', 'zippyshare.com',
+  'anonfiles.com', 'bayfiles.com', 'rapidgator.net', 'uploaded.net',
+  'nitroflare.com', 'turbobit.net', 'filefactory.com', 'sendspace.com',
+  'wetransfer.com', 'pixeldrain.com', 'workupload.com', 'krakenfiles.com',
+];
+
 class UnlockResult {
   final String input;
   final String finalUrl;
   final int status;
   final List<String> chain;
   final List<String> candidates;
+  final List<String> originalLinks;
   final String title;
   UnlockResult({
     required this.input,
@@ -38,6 +48,7 @@ class UnlockResult {
     required this.status,
     required this.chain,
     required this.candidates,
+    required this.originalLinks,
     required this.title,
   });
 }
@@ -53,8 +64,20 @@ class Unlocker {
   static final _openRe = RegExp(
       r'window\.open\(\s*[\x22\x27]([^\x22\x27\s]+)[\x22\x27]',
       caseSensitive: false);
+  static final _b64Re = RegExp(r'[A-Za-z0-9+/]{24,}={0,2}');
   static final _titleRe =
       RegExp(r'<title[^>]*>(.*?)</title>', caseSensitive: false, dotAll: true);
+
+  static bool isFileHost(String u) {
+    try {
+      final h = Uri.parse(u).host.toLowerCase();
+      return kFileHosts.any((d) => h == d || h.endsWith('.' + d));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String _clean(String u) => u.replaceAll(RegExp(r'[).,;\x22\x27]+'), '');
 
   static Future<UnlockResult> unlock(String raw) async {
     var url = raw.trim();
@@ -100,8 +123,7 @@ class Unlocker {
 
     final cands = <String>{};
     for (final m in _urlRe.allMatches(body)) {
-      var u = m.group(0)!.trim();
-      u = u.replaceAll(RegExp(r'[).,;\x22\x27]+'), '');
+      final u = _clean(m.group(0)!.trim());
       if (u.startsWith('http')) cands.add(u);
     }
     for (final m in _metaRe.allMatches(body)) {
@@ -119,13 +141,20 @@ class Unlocker {
         cands.add(Uri.parse(resolvedFinal).resolve(m.group(1)!.trim()).toString());
       } catch (_) {}
     }
+    // base64-encoded URLs
+    for (final m in _b64Re.allMatches(body)) {
+      try {
+        final dec = utf8.decode(base64.decode(m.group(0)!));
+        if (dec.startsWith('http')) cands.add(_clean(dec));
+      } catch (_) {}
+    }
 
     const adDomains = {
-      'doubleclick.net','googlesyndication.com','googleadservices.com',
-      'facebook.com','fbcdn.net','twitter.com','x.com','t.co',
-      'analytics.google.com','googletagmanager.com','adservice.google.com',
-      'popads.net','popcash.net','propellerads.com','adsterra.com',
-      'mgid.com','revcontent.com','taboola.com','outbrain.com',
+      'doubleclick.net', 'googlesyndication.com', 'googleadservices.com',
+      'facebook.com', 'fbcdn.net', 'twitter.com', 'x.com', 't.co',
+      'analytics.google.com', 'googletagmanager.com', 'adservice.google.com',
+      'popads.net', 'popcash.net', 'propellerads.com', 'adsterra.com',
+      'mgid.com', 'revcontent.com', 'taboola.com', 'outbrain.com',
     };
     bool isAd(String u) {
       try {
@@ -135,6 +164,7 @@ class Unlocker {
         return false;
       }
     }
+
     final inputHost = Uri.tryParse(url)?.host.toLowerCase() ?? '';
     final filtered = <String>[];
     final seen = <String>{};
@@ -145,6 +175,9 @@ class Unlocker {
       if (seen.add(c)) filtered.add(c);
     }
     filtered.sort((a, b) {
+      final fa = isFileHost(a) ? 0 : 1;
+      final fb = isFileHost(b) ? 0 : 1;
+      if (fa != fb) return fa.compareTo(fb);
       final ha = Uri.tryParse(a)?.host.toLowerCase() ?? '';
       final hb = Uri.tryParse(b)?.host.toLowerCase() ?? '';
       final da = (ha != inputHost && ha.isNotEmpty) ? 0 : 1;
@@ -152,6 +185,8 @@ class Unlocker {
       if (da != db) return da.compareTo(db);
       return a.length.compareTo(b.length);
     });
+
+    final originalLinks = filtered.where(isFileHost).toList();
 
     final titleMatch = _titleRe.firstMatch(body);
     final title = titleMatch != null
@@ -163,7 +198,8 @@ class Unlocker {
       finalUrl: resolvedFinal,
       status: status,
       chain: chain,
-      candidates: filtered.take(60).toList(),
+      candidates: filtered.take(80).toList(),
+      originalLinks: originalLinks,
       title: title,
     );
   }
@@ -213,41 +249,122 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _copy(String u) async {
+    await Clipboard.setData(ClipboardData(text: u));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('copied'), duration: Duration(seconds: 1)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Link Unlocker')),
+      appBar: AppBar(
+        title: const Text('Link Unlocker'),
+        centerTitle: false,
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'Paste sfgl / sub4unlock / locker URL. App follows redirects & scrapes candidate final links.',
-              style: TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _ctrl,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: 'https://...',
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text('Paste locker URL',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 4),
+                    Text('sfgl, sub4unlock, adf.ly, ouo, dll. App follow redirect & scrape link asli.',
+                        style: Theme.of(context).textTheme.bodySmall),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _ctrl,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        hintText: 'https://...',
+                        prefixIcon: Icon(Icons.link),
+                      ),
+                      onSubmitted: (_) => _go(),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: _loading ? null : _go,
+                      icon: _loading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.lock_open),
+                      label: Text(_loading ? 'resolving...' : 'Unlock'),
+                    ),
+                  ],
+                ),
               ),
-              onSubmitted: (_) => _go(),
-            ),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: _loading ? null : _go,
-              child: Text(_loading ? 'fetching...' : 'Unlock'),
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),
-              Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+              Card(
+                color: cs.errorContainer,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(_error!, style: TextStyle(color: cs.onErrorContainer)),
+                ),
+              ),
             ],
             if (_result != null) ...[
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
+              if (_result!.originalLinks.isNotEmpty)
+                Card(
+                  color: cs.primaryContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          Icon(Icons.verified, color: cs.onPrimaryContainer),
+                          const SizedBox(width: 8),
+                          Text('Original link terdeteksi',
+                              style: TextStyle(
+                                  color: cs.onPrimaryContainer,
+                                  fontWeight: FontWeight.bold)),
+                        ]),
+                        const SizedBox(height: 8),
+                        ..._result!.originalLinks.map((l) => Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Row(children: [
+                                Expanded(
+                                  child: SelectableText(l,
+                                      style: TextStyle(color: cs.onPrimaryContainer)),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.copy),
+                                  onPressed: () => _copy(l),
+                                  color: cs.onPrimaryContainer,
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.open_in_new),
+                                  onPressed: () => _open(l),
+                                  color: cs.onPrimaryContainer,
+                                ),
+                              ]),
+                            )),
+                      ],
+                    ),
+                  ),
+                ),
               if (_result!.title.isNotEmpty)
                 _Block(title: 'title', child: Text(_result!.title)),
+              _Block(
+                title: 'status',
+                child: Text('${_result!.status} · final: ${_result!.finalUrl}'),
+              ),
               _Block(
                 title: 'redirect chain (${_result!.chain.length})',
                 child: Column(
@@ -256,13 +373,9 @@ class _HomePageState extends State<HomePage> {
                       .asMap()
                       .entries
                       .map((e) => Text('${e.key}: ${e.value}',
-                          style: const TextStyle(fontSize: 13)))
+                          style: const TextStyle(fontSize: 12)))
                       .toList(),
                 ),
-              ),
-              _Block(
-                title: 'status',
-                child: Text('${_result!.status} · final: ${_result!.finalUrl}'),
               ),
               if (_result!.candidates.isNotEmpty)
                 _Block(
@@ -272,12 +385,20 @@ class _HomePageState extends State<HomePage> {
                     children: _result!.candidates
                         .map((l) => Padding(
                               padding: const EdgeInsets.only(bottom: 6),
-                              child: OutlinedButton(
-                                onPressed: () => _open(l),
-                                child: Text(l,
-                                    textAlign: TextAlign.left,
-                                    style: const TextStyle(fontSize: 13)),
-                              ),
+                              child: Row(children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () => _open(l),
+                                    child: Text(l,
+                                        textAlign: TextAlign.left,
+                                        style: const TextStyle(fontSize: 12)),
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.copy, size: 18),
+                                  onPressed: () => _copy(l),
+                                ),
+                              ]),
                             ))
                         .toList(),
                   ),

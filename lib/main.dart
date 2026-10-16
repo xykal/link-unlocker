@@ -62,7 +62,7 @@ class UnlockResult {
 }
 
 class Unlocker {
-  static final _urlRe = RegExp(r'https?://[^\s\x22\x27<>\\]+', caseSensitive: false);
+  static final _urlRe = RegExp(r"https?://[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+", caseSensitive: false);
   static final _metaRe = RegExp(
       r'<meta[^>]*content=[^>]*url=([^\s\x22\x27>]+)',
       caseSensitive: false);
@@ -245,7 +245,7 @@ class Unlocker {
       } catch (_) {}
     }
     // JSON-escaped URLs already handled by _norm in _clean? ensure
-    final jsonUrlRe = RegExp(r'https?:\\?/\\?/[^\s\x22\x27<>]+', caseSensitive: false);
+    final jsonUrlRe = RegExp(r"https?:\\?/\\?/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-\\]+", caseSensitive: false);
     for (final m in jsonUrlRe.allMatches(body)) {
       final u = _clean(m.group(0)!);
       if (u.startsWith('http')) cands.add(u);

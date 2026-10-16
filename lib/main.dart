@@ -215,7 +215,8 @@ class Unlocker {
       client.close();
     }
     final resolvedFinal = chain.isNotEmpty ? chain.last : url;
-    final body = last?.body ?? '';
+    final rawBody = last?.body ?? '';
+    final body = _unescapeHtml(rawBody);
     final status = last?.statusCode ?? 0;
 
     final cands = <String>{};
@@ -360,6 +361,13 @@ class Unlocker {
       title: title,
     );
   }
+
+  static String _unescapeHtml(String s) => s
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .replaceAll('&amp;', '&')
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>');
 
   static String _stripTags(String s) =>
       s.replaceAll(RegExp(r'<[^>]*>'), '').trim();
